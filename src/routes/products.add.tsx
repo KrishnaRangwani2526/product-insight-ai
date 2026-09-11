@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
 import { Camera, Upload, Plus, Wand2, Check } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState, type ChangeEvent } from "react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/AppShell";
 import {
@@ -19,6 +20,7 @@ import { useApp } from "@/lib/store";
 import { CATEGORIES } from "@/lib/demo-data";
 import { aiService, type CatalogueCopy } from "@/services/aiService";
 import { cn } from "@/lib/utils";
+import { analyzeProductImage } from "@/lib/product-image.functions";
 
 export const Route = createFileRoute("/products/add")({
   head: () => ({
@@ -38,7 +40,12 @@ const SAMPLES = ["shawl", "vase", "bag", "basket", "dupatta"];
 function AddProduct() {
   const { addProduct, state } = useApp();
   const navigate = useNavigate();
+  const analyzeImage = useServerFn(analyzeProductImage);
+  const cameraInput = useRef<HTMLInputElement>(null);
+  const uploadInput = useRef<HTMLInputElement>(null);
   const [photo, setPhoto] = useState<string | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [aiLabelled, setAiLabelled] = useState(false);
   const [applied, setApplied] = useState<string[]>([]);
   const [busyTool, setBusyTool] = useState<string | null>(null);
   const [form, setForm] = useState({
@@ -57,6 +64,80 @@ function AddProduct() {
   const [writing, setWriting] = useState(false);
 
   const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
+
+  const prepareImage = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("This photo could not be read."));
+      reader.onload = () => {
+        const source = typeof reader.result === "string" ? reader.result : "";
+        const image = new Image();
+        image.onerror = () => reject(new Error("Please choose a valid JPG, PNG, or WebP image."));
+        image.onload = () => {
+          const longestSide = 1200;
+          const scale = Math.min(1, longestSide / Math.max(image.width, image.height));
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(image.width * scale));
+          canvas.height = Math.max(1, Math.round(image.height * scale));
+          const context = canvas.getContext("2d");
+          if (!context) {
+            reject(new Error("This browser could not prepare the photo."));
+            return;
+          }
+          context.drawImage(image, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL("image/jpeg", 0.82));
+        };
+        image.src = source;
+      };
+      reader.readAsDataURL(file);
+    });
+
+  const choosePhoto = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please choose an image file.");
+      return;
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      toast.error("That photo is too large. Please choose one under 15 MB.");
+      return;
+    }
+
+    setAnalyzing(true);
+    setAiLabelled(false);
+    setApplied([]);
+    setCopy(null);
+    try {
+      const imageDataUrl = await prepareImage(file);
+      setPhoto(imageDataUrl);
+      const result = await analyzeImage({ data: { imageDataUrl } });
+      set({
+        name: result.name,
+        category: result.category,
+        material: result.material,
+        colour: result.colour,
+        size: result.size,
+      });
+      setCopy({
+        title: result.name,
+        short: result.short,
+        full: result.full,
+        hindi: result.hindi,
+        english: result.english,
+        keywords: result.keywords,
+      });
+      setAiLabelled(true);
+      toast.success("Product details found", { description: "Review the AI labels before saving." });
+    } catch (error) {
+      toast.error("Photo analysis failed", {
+        description: error instanceof Error ? error.message : "Please try again.",
+      });
+    } finally {
+      setAnalyzing(false);
+    }
+  };
 
   const runTool = async (tool: string) => {
     setBusyTool(tool);
@@ -87,6 +168,10 @@ function AddProduct() {
       status: "active",
       material: form.material,
       description: copy?.full ?? spoken,
+      colour: form.colour,
+      size: form.size,
+      keywords: copy?.keywords,
+      aiLabelled,
     });
     toast.success("Product saved", { description: `${p.name} is now in your catalogue and your store.` });
     navigate({ to: "/products/$id", params: { id: p.id } });
@@ -100,26 +185,58 @@ function AddProduct() {
         <SectionLabel>Step 1 · Product photo</SectionLabel>
         {!photo ? (
           <>
+            <input
+              ref={cameraInput}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="sr-only"
+              onChange={(event) => void choosePhoto(event)}
+            />
+            <input
+              ref={uploadInput}
+              type="file"
+              accept="image/*"
+              className="sr-only"
+              onChange={(event) => void choosePhoto(event)}
+            />
             <div className="grid grid-cols-2 gap-3">
               <button
-                onClick={() => setPhoto(SAMPLES[0]!)}
+                type="button"
+                onClick={() => cameraInput.current?.click()}
                 className="frost-tile flex flex-col items-center gap-2 p-6 text-[14px] font-semibold"
+                disabled={analyzing}
               >
                 <Camera className="size-6 text-primary" /> Take Photo
               </button>
               <button
-                onClick={() => setPhoto(SAMPLES[1]!)}
+                type="button"
+                onClick={() => uploadInput.current?.click()}
                 className="frost-tile flex flex-col items-center gap-2 p-6 text-[14px] font-semibold"
+                disabled={analyzing}
               >
                 <Upload className="size-6 text-primary" /> Upload Photo
               </button>
             </div>
-            <p className="mt-3 text-[12px] text-muted-foreground">
-              For this demo, tapping either button picks a sample photo.
-            </p>
+            {analyzing ? <div className="mt-3"><ProcessingBar label="Reading the product photo with AI…" /></div> : null}
           </>
         ) : (
           <div>
+            <input
+              ref={cameraInput}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="sr-only"
+              onChange={(event) => void choosePhoto(event)}
+            />
+            <input
+              ref={uploadInput}
+              type="file"
+              accept="image/*"
+              className="sr-only"
+              onChange={(event) => void choosePhoto(event)}
+            />
             <div className="flex gap-3">
               <img
                 src={productImage(photo)}
@@ -129,24 +246,21 @@ function AddProduct() {
                 className="size-28 rounded-2xl object-cover"
               />
               <div className="flex-1">
-                <p className="text-[14px] font-semibold">AI Product Studio</p>
-                <p className="text-[12px] text-muted-foreground">Tap a tool to clean up your photo.</p>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {SAMPLES.map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => setPhoto(s)}
-                      className={cn(
-                        "size-9 overflow-hidden rounded-lg ring-1 ring-line",
-                        photo === s && "ring-2 ring-primary",
-                      )}
-                    >
-                      <img src={productImage(s)} alt={s} width={64} height={64} className="size-full object-cover" />
-                    </button>
-                  ))}
+                <p className="text-[14px] font-semibold">{aiLabelled ? "AI labels ready" : "AI Product Studio"}</p>
+                <p className="text-[12px] text-muted-foreground">
+                  {aiLabelled ? "Review the details below before saving." : "Tap a tool to clean up your photo."}
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <ActionButton variant="soft" className="min-h-9 px-3 text-[12px]" onClick={() => cameraInput.current?.click()}>
+                    <Camera className="mr-1 inline size-3.5" /> Retake
+                  </ActionButton>
+                  <ActionButton variant="soft" className="min-h-9 px-3 text-[12px]" onClick={() => uploadInput.current?.click()}>
+                    <Upload className="mr-1 inline size-3.5" /> Replace
+                  </ActionButton>
                 </div>
               </div>
             </div>
+            {analyzing ? <div className="mt-3"><ProcessingBar label="Reading the product photo with AI…" /></div> : null}
             <div className="mt-3 flex flex-wrap gap-2">
               {IMAGE_TOOLS.map((tool) => (
                 <button

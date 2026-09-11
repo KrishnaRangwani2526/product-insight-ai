@@ -14,6 +14,7 @@ import dupatta from "@/assets/dupatta.jpg";
 export const PRODUCT_IMAGES: Record<string, string> = { shawl, vase, bag, basket, dupatta };
 
 export function productImage(key: string) {
+  if (key.startsWith("data:image/") || key.startsWith("blob:")) return key;
   return PRODUCT_IMAGES[key] ?? shawl;
 }
 

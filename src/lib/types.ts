@@ -23,6 +23,10 @@ export interface Product {
   status: "active" | "draft";
   description?: string;
   material?: string;
+  colour?: string;
+  size?: string;
+  keywords?: string[];
+  aiLabelled?: boolean;
   bestSeller?: boolean;
 }
 

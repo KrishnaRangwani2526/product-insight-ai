@@ -24,5 +24,5 @@
 - [x] Installable home-screen icons and mobile metadata
 - [x] Safe offline support without preview caching
 - [x] Mobile viewport verification
-- [ ] Real camera/upload product photo capture and AI labelling
-- [ ] Database connection notes for labelled product records
+- [x] Real camera/upload product photo capture and AI labelling
+- [x] Database connection notes for labelled product records
